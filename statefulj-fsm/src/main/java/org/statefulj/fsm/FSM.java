@@ -58,7 +58,7 @@ public class FSM<T> {
 	 * @param name Name associated with the FSM
 	 */
 	public FSM(String name) {
-		this.name = name;
+		this(name, null, DEFAULT_RETRIES, DEFAULT_RETRY_INTERVAL);
 	}
 
 	/**
@@ -67,7 +67,7 @@ public class FSM<T> {
 	 * @param persister Persister responsible for setting the State on the Entity
 	 */
 	public FSM(Persister<T> persister) {
-		this.persister = persister;
+		this("FSM", persister, DEFAULT_RETRIES, DEFAULT_RETRY_INTERVAL);
 	}
 
 	/**
@@ -77,8 +77,7 @@ public class FSM<T> {
 	 * @param persister Persister responsible for setting the State on the Entity
 	 */
 	public FSM(String name, Persister<T> persister) {
-		this.name = name;
-		this.persister = persister;
+		this(name, persister, DEFAULT_RETRIES, DEFAULT_RETRY_INTERVAL);
 	}
 
 	/**
@@ -94,6 +93,12 @@ public class FSM<T> {
 		this.persister = persister;
 		this.retryAttempts = retryAttempts;
 		this.retryInterval = retryInterval;
+                
+                if (this.persister == null) { return; }
+
+                // trigger the on entry event for the init state
+		StateImpl<T> currentState = (StateImpl<T>) this.persister.getStartState();
+		currentState.sendOnEntryEvent();
 	}
 
 	/**
@@ -108,6 +113,7 @@ public class FSM<T> {
 	 */
 	public State<T> onEvent(T stateful, String event, Object ... args) throws TooBusyException {
 
+                State<T> stateToReturn = null;
 		int attempts = 0;
 
 		while(this.retryAttempts == -1 || attempts < this.retryAttempts) {
@@ -142,7 +148,9 @@ public class FSM<T> {
 					}
 				}
 
-				return current;
+                                stateToReturn = current;
+                                break;
+//				return current;
 
 			} catch(RetryException re) {
 
@@ -160,8 +168,27 @@ public class FSM<T> {
 				attempts++;
 			}
 		}
-		logger.error("{}({})::Unable to process event", this.name, stateful);
-		throw new TooBusyException();
+                
+                if (stateToReturn == null) {
+                    logger.error("{}({})::Unable to process event", this.name, stateful);
+                    throw new TooBusyException();
+                }
+                
+    // Here we trigger the on Entry & on Exist Event
+                StateImpl<T> previousState = (StateImpl<T>) this.getCurrentState(stateful);
+                StateImpl<T> currentState = (StateImpl<T>) stateToReturn;
+
+                // transition has been done
+                if (previousState.getName().equals(currentState.getName()) == false) {
+                    previousState.sendOnExitEvent();
+                    currentState.sendOnEntryEvent();
+                }
+                // loop the same state
+                else {
+                    currentState.sendOnEntryEvent();
+                }
+                
+                return stateToReturn;
 	}
 
 	public int getRetryAttempts() {
